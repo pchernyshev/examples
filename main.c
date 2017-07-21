@@ -1,14 +1,14 @@
 #include <stdbool.h>
 #include <string.h>
+#include <stdio.h>
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
 
-#define STR(x) #x
+#include "uart.h"
+#include "i2c.h"
+
 #define BIT(x) (1 << (x))
-
-static int print_polling(const char str[]);
-
 
 /* Led handling routines */
 /* Led is connected to PB7, Digital Pin 13*/
@@ -77,54 +77,29 @@ static void init_timers(void) {
 	TCCR1A = 0;
 	TCCR1B = (1 << WGM12) | (1 << CS12) | (1 << CS10); /* comparator and prescaler */
 	OCR1A = 15624;
-	TIMSK1 = 1 << OCIE1A;
+	//TIMSK1 = 1 << OCIE1A;
 
+#if 0
 	/* Timer initialization, via overflow */
 	TCCR3A = 0;
 	TCCR3B = (1 << CS32) | (1 << CS30); /* prescaler */
 	TCNT3 = 65535-8000;
 	TIMSK3 = 1 << TOIE3;
+#endif
 }
 
 ISR(TIMER1_COMPA_vect) {
 	print_polling("X\r\n");
 }
 
+#if 0
 ISR(TIMER3_OVF_vect) {
-	print_polling("Y\r\n");
 	TCNT3 = 65535-8000;
-
 }
+#endif
 
 
 
-/* UART routines */
-//TODO cleanup
-static void init_uart(const unsigned long baudrate) {
-	const uint16_t ubrr = F_CPU/8/baudrate - 1;
-
-	UBRR0H = ubrr >> 8;
-	UBRR0L = ubrr & 0xff;
-	UCSR0A |= 1 << U2X0;
-
-	UCSR0B = 1 << TXEN0;
-
-	/* Set frame format: 8data, 1stop bit */
-	UCSR0C = 3 << UCSZ00;
-}
-
-/* Primitive synchronous print */
-static int print_polling(const char str[]) {
-	size_t i = 0;
-	const size_t N = strlen(str);
-
-	for (i = 0; i < N; i++) {
-		UDR0 = str[i];
-		while (!(UCSR0A & (1 << UDRE0)));
-	}
-
-	return N;
-}
 
 /* Bad example of the delay, but good example of a volatile mine */
 static void mydelay_us(uint32_t us) {
@@ -148,7 +123,7 @@ static void mydelay_ms(unsigned short ms) {
 
 
 
-void setup() {
+void hw_init() {
 	cli();
 
 	init_uart(115200);
@@ -156,26 +131,100 @@ void setup() {
 	init_button();
 	init_interrupt();
 	init_timers();
+	init_i2c();
 
 	sei();
 
 	print_polling("Initialization finished\r\n");
 }
 
+void init() {
+	size_t i = 0;
+	const uint8_t CONTINOUS_HIGH_RESOLUTION = 0x10;
+	const uint8_t DISPLAY_INIT[] = {
+		0xae, 0x00, 0x10, 0x40, 0xb0, 0x81, 0xff, 0xa1, 0xa6, 0xc9, 0xa8,
+		0x3f, 0xd3, 0x00, 0xd5, 0x80, 0xd9, 0xf1, 0xda, 0x12, 0xdb, 0x40,
+		0x8d, 0x14, 0xaf
+	};
+
+	i2c_send(0x23, 1, &CONTINOUS_HIGH_RESOLUTION);
+
+#if 1
+	for (i = 0; i <sizeof(DISPLAY_INIT); i++) {
+		uint8_t cmd[] = { 0, 0 };
+		cmd[1] = DISPLAY_INIT[i];
+		i2c_send(0x3c, sizeof(cmd), cmd);
+		mydelay_ms(50);
+	}
+#endif
+
+	DDRB |= 0x7;
+	PORTB |= 0x7;
+
+	//DIO  = PB1
+	//SCLK = PB0
+	//RCLK = PB2
+
+		/*
+	PORTB &= ~0x2;
+		mydelay_ms(1);
+	for (i = 0; i < 16; i++) {
+		PORTB |= 0x4;
+		mydelay_ms(1);
+		PORTB &= ~0x4;
+		mydelay_ms(1);
+
+	}
+
+	PORTB &= ~0x2;
+	for (i = 0; i < 16; i++) {
+		PORTB &= ~0x1;
+		mydelay_ms(1);
+		PORTB |= 0x1;
+		mydelay_ms(1);
+	}
+
+	PORTB |= 0x2;
+	for (i = 0; i < 4; i++) {
+		PORTB &= ~0x1;
+		mydelay_ms(1);
+		PORTB |= 0x1;
+		mydelay_ms(1);
+	}
+
+	PORTB &= ~0x4;
+		mydelay_ms(1);
+	PORTB |= 0x4;
+		mydelay_ms(1);
+	*/
+}
+
+void read_sensor()
+{
+	uint16_t brightness = 0;
+	if (i2c_receive(0x23, sizeof(brightness), (uint8_t *)&brightness)) {
+		char s[sizeof("0x0000\r\n")];
+		sprintf(s, "%#04x\r\n", brightness);
+	}
+}
 
 int main()
 {
-	const unsigned DELAY_MS = 200;
+	const unsigned DELAY_MS = 1000;
 
-	setup();
+	hw_init();
+	init();
 
 	while(1) {
+#if 1 
 		if (is_button_pressed())
 			set_led(1);
 		else
 			set_led(0);
+#endif
 
 		mydelay_ms(DELAY_MS);
+		read_sensor();
 	}
 
 	/* Not reachable */
