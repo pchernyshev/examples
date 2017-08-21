@@ -3,6 +3,7 @@
 #include <stdbool.h>
 
 #include <avr/io.h>
+#include <avr/pgmspace.h>
 
 #include "i2c.h"
 #include "uart.h"
@@ -22,33 +23,47 @@ enum TWI_STATUS {
 	TWI_M_SLAR_ACK = 0x40,
 	TWI_M_SLAR_NACK = 0x48,
 	TWI_M_RDATA_ACK = 0x50,
-	TWI_M_RDATA_NACK = 0x58,
+	TWI_M_RDATA_NACK = 0x58
 };
 
-enum TWI_ERROR_STATUS {
-	TWI_OK,
-	TWI_ERROR,
-	TWI_FATAL,
-	TWI_UNKNOWN
-};
+#define I2C_DEBUG
+#define I2C_STR_ERRORS
 
-static const char* twi_error_strings[] = {
+#ifdef I2C_STR_ERRORS
+static const char twi_error_strings[][44] PROGMEM = {
 	[ 0 ] = "Unknown status",
-	[ TWI_M_START ]            = "START condition has been transmitted",
-	[ TWI_M_START_REPEAT ]     = "A repeated START condition has been transmitted",
-	[ TWI_M_ARBITRATION_LOST ] = "Arbitration lost",
-	[ TWI_M_SLAW_ACK ]         = "SLA+W has been transmitted, got ACK",
-	[ TWI_M_SLAW_NACK ]        = "SLA+W has been transmitted, got NACK",
-	[ TWI_M_WDATA_ACK ]        = "Data has been transmitted, got ACK",
-	[ TWI_M_WDATA_NACK ]       = "Data has been transmitted, got NACK",
-	[ TWI_M_SLAR_ACK ]         = "SLA+R has been transmitted, got ACK",
-	[ TWI_M_SLAR_NACK ]        = "SLA+R has been transmitted, got NACK",
-	[ TWI_M_RDATA_ACK ]        = "Data has been received, sent ACK",
-	[ TWI_M_RDATA_NACK ]       = "Data has been received, sent NACK",
+	[ TWI_M_START >> 3]            = "START condition has been transmitted",
+	[ TWI_M_START_REPEAT >> 3]     = "A REP-START condition has been transmitted",
+	[ TWI_M_ARBITRATION_LOST >> 3] = "Arbitration lost",
+	[ TWI_M_SLAW_ACK >> 3]         = "SLA+W has been transmitted, got ACK",
+	[ TWI_M_SLAW_NACK >> 3]        = "SLA+W has been transmitted, got NACK",
+	[ TWI_M_WDATA_ACK >> 3]        = "Data has been transmitted, got ACK",
+	[ TWI_M_WDATA_NACK >> 3]       = "Data has been transmitted, got NACK",
+	[ TWI_M_SLAR_ACK >> 3]         = "SLA+R has been transmitted, got ACK",
+	[ TWI_M_SLAR_NACK >> 3]        = "SLA+R has been transmitted, got NACK",
+	[ TWI_M_RDATA_ACK >> 3]        = "Data has been received, sent ACK",
+	[ TWI_M_RDATA_NACK >> 3]       = "Data has been received, sent NACK",
 };
-
 static const char *i2c_last_error;
-
+static inline void i2c_dump_err()
+{
+	printb("Error: %S\r\n", i2c_last_error);
+}
+static inline void i2c_remember_err(const uint8_t twsr)
+{
+	i2c_last_error = twi_error_strings[twsr >> 3];
+}
+#else
+static uint8_t i2c_last_error;
+static inline void i2c_dump_err()
+{
+	printb("Error: %#02hhx\r\n", i2c_last_error);
+}
+static inline void i2c_remember_err(const uint8_t twsr)
+{
+	i2c_last_error = twsr;
+}
+#endif
 
 static int i2c_check_status()
 {
@@ -59,19 +74,19 @@ static int i2c_check_status()
 		case TWI_M_SLAW_NACK:
 		case TWI_M_SLAR_NACK:
 		case TWI_M_WDATA_NACK:
-		case TWI_M_RDATA_NACK:
+		case TWI_M_START_REPEAT:
 			err = TWI_ERROR;
 			break;
 
 		case TWI_M_START:
 		case TWI_M_SLAW_ACK:
-		case TWI_M_WDATA_ACK:
 		case TWI_M_SLAR_ACK:
+		case TWI_M_WDATA_ACK:
 		case TWI_M_RDATA_ACK:
+		case TWI_M_RDATA_NACK:
 			err = TWI_OK;
 			break;
 
-		case TWI_M_START_REPEAT:
 		case TWI_M_ARBITRATION_LOST:
 			err = TWI_FATAL;
 			break;
@@ -82,7 +97,7 @@ static int i2c_check_status()
 			break;
 	}
 
-	i2c_last_error = twi_error_strings[twsr];
+	i2c_remember_err(twsr);
 	return err;
 }
 
@@ -115,13 +130,6 @@ static inline void i2c_stop()
 	TWCR = I2C_TX | (1 << TWSTO);
 }
 
-static inline void i2c_dump_err()
-{
-	print_polling("Error: ");
-	print_polling(i2c_last_error);
-	print_polling("\r\n");
-}
-
 
 
 void init_i2c() {
@@ -130,14 +138,19 @@ void init_i2c() {
 	TWCR = 1 << TWEN;
 }
 
+#undef I2C_DEBUG
+
 void i2c_send(uint8_t address, const size_t N, const uint8_t bytes[N])
 {
 	size_t i = 0;
 	enum TWI_ERROR_STATUS err = TWI_OK;
 
-	char dbg[sizeof("Sending 000 bytes\r\n")];
-	sprintf(dbg, "Sending %u bytes\r\n", N);
-	print_polling(dbg);
+#ifdef I2C_DEBUG
+	printb("Sending %u: ", N);
+	for (i = 0; (i < 4) && (i < N); i++)
+		printb("%02hhx", bytes[i]);
+	printb("\r\n%s\r\n", i < N? "...": "");
+#endif /* I2C_DEBUG */
 
 	err = i2c_start(address, false);
 	if (!err)
@@ -154,36 +167,39 @@ void i2c_send(uint8_t address, const size_t N, const uint8_t bytes[N])
 		i2c_dump_err();
 }
 
+#define I2C_DEBUG
 uint8_t i2c_receive(uint8_t address, const uint8_t N, uint8_t bytes[N])
 {
 	size_t n = 0;
-	bool exit = false;
 	enum TWI_ERROR_STATUS err = TWI_OK;
 
+#ifdef I2C_DEBUG
+	printb("I2C[%#hhx]: ", N);
+#endif /* I2C_DEBUG */
 	err = i2c_start(address, true);
 
 	while (!err && n < N) {
-		TWCR = I2C_TX | (1 << TWEA);
+		if (n < N-1)
+			TWCR = I2C_TX | 1 << TWEA;
+		else
+			TWCR = I2C_TX;
 		err = i2c_wait();
-		if (!err)
-			bytes[n++] = TWDR;
+		if (!err) {
+			bytes[n] = TWDR;
+#ifdef I2C_DEBUG
+			printb("%02hhx", bytes[n]);
+#endif /* I2C_DEBUG */
+		}
+		n++;
 	}
 
 	i2c_stop();
 	if (err)
 		i2c_dump_err();
 
-	if (n) {
-		size_t i = 0;
-		char str[32];
-		sprintf(str, "I2C[%#hhx]: ", n);
-		print_polling(str);
-		for (i = 0; i < n; i++) {
-			sprintf(str, "%02hhx ", bytes[i]);
-			print_polling(str);
-		}
-		print_polling("\r\n");
-	}
+#ifdef I2C_DEBUG
+	printb("\r\n");
+#endif /* I2C_DEBUG */
 
 	return n;
 }

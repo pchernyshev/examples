@@ -4,7 +4,7 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 
-#define MAX_BUFFERABLE_STR_LENGTH 128
+#define MAX_BUFFERABLE_STR_LENGTH 64
 
 /** UART Initialization function
  *  Enables UART interrupt and powers up the UART module
@@ -19,5 +19,7 @@ void init_uart(const unsigned long baudrate);
  *  @return number of printed characters
  */
 int print_polling(const char str[]);
+
+void printb(const char fmt[], ...);
 
 #endif /* _UART_H */
